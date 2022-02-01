@@ -137,8 +137,11 @@ def setup_persistent_compute_target(workspace, cluster_name, vm_size, max_nodes)
     cpu_cluster.wait_for_completion(show_output=True)
     return cpu_cluster
 
-
-def create_run_config(cpu_cluster, docker_proc_type, conda_env_file):
+def create_run_config(
+    cpu_cluster,
+    docker_proc_type,
+    workspace,
+    wheel_path):
     """
     AzureML requires the run environment to be setup prior to submission.
     This configures a docker persistent compute.  Even though
@@ -170,11 +173,20 @@ def create_run_config(cpu_cluster, docker_proc_type, conda_env_file):
     # False means the user will provide a conda file for setup
     # True means the user will manually configure the environment
     run_amlcompute.environment.python.user_managed_dependencies = False
-    run_amlcompute.environment.python.conda_dependencies = CondaDependencies(
-        conda_dependencies_file_path=conda_env_file
-    )
-    return run_amlcompute
 
+    print("run_amlcompute.environment.add_private_pip_wheel")
+    whl_url = run_amlcompute.environment.add_private_pip_wheel(workspace=workspace, file_path=wheel_path, exist_ok=True)
+    print(whl_url)
+
+    conda_dep = CondaDependencies()
+    print("conda_dep.add_pip_package")
+    conda_dep.add_pip_package(whl_url)
+    conda_dep.add_pip_package("PySocks==1.7.1")
+    
+    print("set env conda dependencies")
+    run_amlcompute.environment.python.conda_dependencies = conda_dep
+
+    return run_amlcompute
 
 def create_experiment(workspace, experiment_name):
     """
@@ -331,6 +343,14 @@ def create_arg_parser():
         default="./reco.yaml",
         help="file with environment variables",
     )
+
+    parser.add_argument(
+        "--wheelpath",
+        action="store",
+        default="./dist/recommenders-1.0.0-py3-none-any.whl",
+        help="path to wheel file for dependencies",
+    )
+
     # AzureML experiment name
     parser.add_argument(
         "--expname",
@@ -384,6 +404,7 @@ if __name__ == "__main__":
 
     cli_auth = AzureCliAuthentication()
 
+    print("setup_workspace")
     workspace = setup_workspace(
         workspace_name=args.wsname,
         subscription_id=args.subid,
@@ -392,6 +413,7 @@ if __name__ == "__main__":
         location=args.location,
     )
 
+    print("setup_persistent_compute_target")
     cpu_cluster = setup_persistent_compute_target(
         workspace=workspace,
         cluster_name=args.clustername,
@@ -399,16 +421,20 @@ if __name__ == "__main__":
         max_nodes=args.maxnodes,
     )
 
+    print("create_run_config")
     run_config = create_run_config(
         cpu_cluster=cpu_cluster,
         docker_proc_type=docker_proc_type,
-        conda_env_file=args.condafile,
+        workspace=workspace,
+        wheel_path=args.wheelpath,
     )
 
     logger.info("exp: In Azure, look for experiment named {}".format(args.expname))
 
     # create new or use existing experiment
+    print("create new or use existing experiment")
     experiment = Experiment(workspace=workspace, name=args.expname)
+    print("submit_experiment_to_azureml")
     run = submit_experiment_to_azureml(
         test=args.test,
         test_folder=args.testfolder,
